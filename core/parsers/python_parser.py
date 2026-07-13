@@ -48,7 +48,6 @@ class PythonParser:
                 if api_match:
                     method, path = api_match.groups()
                     parsed_node.api_endpoint = f"{method.upper()} {path}"
-                    print(f"🟢 [PYTHON EXTRACT] Found Endpoint: {parsed_node.api_endpoint} in {parsed_node.name}")
                 consumer_match = re.search(r'(?:requests|httpx|session|client)\.(get|post|put|delete|patch)\([\'"]([^\'"]+)[\'"]\)', parsed_node.code_snippet, re.IGNORECASE)
                 if consumer_match:
                     method, path = consumer_match.groups()
@@ -57,7 +56,6 @@ class PythonParser:
                     module.calls.append(ParsedCall(
                         caller=scope, callee="API", line=func_node.start_point[0]+1, api_call=api_call_str
                     ))
-                    print(f"🔵 [PYTHON EXTRACT] Consumer: {api_call_str} in {parsed_node.name}")
                 
                 module.functions.append(parsed_node)
 
