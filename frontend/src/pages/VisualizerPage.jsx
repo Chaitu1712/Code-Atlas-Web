@@ -4,10 +4,10 @@ import GraphVisualizer from '../GraphVisualizer';
 import Sidebar from '../components/Sidebar';
 import CodePanel from '../components/CodePanel';
 import CyclesAlert from '../components/CyclesAlert'; 
+import { apiFetch } from '../utils/apiClient';
 
-export default function VisualizerPage({ authFetch }) {
+export default function VisualizerPage() {
     const { projectName } = useParams();
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     const [graphData, setGraphData] = useState(null);
     const [cycles, setCycles] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -25,30 +25,41 @@ export default function VisualizerPage({ authFetch }) {
         localStorage.setItem('codeAtlasRecents', JSON.stringify(newRecents));
 
         setLoading(true);
-        authFetch(`${apiUrl}/api/graph/${projectName}`)
+        apiFetch(`/api/graph/${projectName}`)
             .then(res => res.json())
-            .then(data => { setGraphData(data.graph); 
+            .then(data => { 
+                setGraphData(data.graph); 
                 setCycles(data.cycles || []); 
-                setLoading(false);  })
+                setLoading(false);  
+            })
             .catch(() => setLoading(false));
     }, [projectName]);
 
     const handleSearch = async (e) => {
         e.preventDefault();
-        if (!query.trim()) { setQuery(''); setSearchResults([]); setSelectedNode(null); return; }
-        setIsSearching(true); setSelectedNode(null); setViewingCode(null);
+        if (!query.trim()) { 
+            setQuery(''); setSearchResults([]); setSelectedNode(null); return; 
+        }
+        setIsSearching(true); 
+        setSelectedNode(null); 
+        setViewingCode(null);
         try {
-            const res = await authFetch(`${apiUrl}/api/search/${projectName}?q=${encodeURIComponent(query)}`);
-            setSearchResults((await res.json()).results || []);
-        } finally { setIsSearching(false); }
+            const res = await apiFetch(`/api/search/${projectName}?q=${encodeURIComponent(query)}`);
+            const data = await res.json();
+            setSearchResults(data.results || []);
+        } finally { 
+            setIsSearching(false); 
+        }
     };
 
     const handleNodeClick = async (nodeId) => {
         setIsCodeLoading(true);
         try {
-            const res = await authFetch(`${apiUrl}/api/node/${projectName}/${encodeURIComponent(nodeId)}`);
+            const res = await apiFetch(`/api/node/${projectName}/${encodeURIComponent(nodeId)}`);
             setViewingCode(await res.json());
-        } finally { setIsCodeLoading(false); }
+        } finally { 
+            setIsCodeLoading(false); 
+        }
     };
 
     return (
@@ -58,12 +69,12 @@ export default function VisualizerPage({ authFetch }) {
                 query={query} setQuery={setQuery} handleSearch={handleSearch} isSearching={isSearching}
                 searchResults={searchResults} selectedNode={selectedNode} setSelectedNode={setSelectedNode}
             />
-            <CodePanel authFetch={authFetch} viewingCode={viewingCode} setViewingCode={setViewingCode} isCodeLoading={isCodeLoading} currentProject={projectName}  />
+            <CodePanel viewingCode={viewingCode} setViewingCode={setViewingCode} isCodeLoading={isCodeLoading} currentProject={projectName} />
             {cycles.length > 0 && <CyclesAlert cycles={cycles} />}
             {loading ? (
-                <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", color: "#64748b" }}>Loading architecture...</div>
+                <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", color: "#64748b" }}>Loading architecture graph...</div>
             ) : (
-                <GraphVisualizer authFetch={authFetch} graphData={graphData} searchResults={searchResults} selectedNode={selectedNode} detailLevel={detailLevel} onNodeClick={handleNodeClick} currentProject={projectName} />
+                <GraphVisualizer graphData={graphData} searchResults={searchResults} selectedNode={selectedNode} detailLevel={detailLevel} onNodeClick={handleNodeClick} currentProject={projectName} />
             )}
         </div>
     );

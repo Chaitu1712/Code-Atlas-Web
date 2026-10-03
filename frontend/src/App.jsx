@@ -1,51 +1,64 @@
-import React,  { useState, useEffect }  from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate} from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import AllProjectsPage from './pages/AllProjectsPage';
 import VisualizerPage from './pages/VisualizerPage';
-import SetupPage from './pages/SetupPage';
 import SettingsPage from './pages/SettingsPage';
-import AuthPage from './pages/AuthPage';
+import GeminiKeyModal from './components/GeminiKeyModal';
+import { getGeminiKey, apiFetch } from './utils/apiClient';
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('codeAtlasToken'));
-  const [isSetup, setIsSetup] = useState(null);
-
-  // Logout function
-  const handleLogout = () => {
-      localStorage.removeItem('codeAtlasToken');
-      setToken(null);
-  };
-
-  // Helper function to make authenticated requests
-  const authFetch = async (url, options = {}) => {
-      const headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
-      const res = await fetch(url, { ...options, headers });
-      if (res.status === 401) handleLogout(); // Auto logout if token expires
-      return res;
-  };
+  const [hasGeminiKey, setHasGeminiKey] = useState(Boolean(getGeminiKey()));
+  const [showKeyModal, setShowKeyModal] = useState(false);
 
   useEffect(() => {
-    if (!token) return;
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-    authFetch(`${apiUrl}/api/config`)
+    // If not in localStorage, check backend config once
+    if (!hasGeminiKey) {
+      apiFetch('/api/config')
         .then(res => res.json())
-        .then(data => setIsSetup(data.is_setup_complete))
-        .catch(() => handleLogout()); // If it fails, token is likely invalid
-  }, [token]);
+        .then(data => {
+          if (data.config?.gemini_api_key) {
+            localStorage.setItem('code_atlas_gemini_key', data.config.gemini_api_key);
+            setHasGeminiKey(true);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [hasGeminiKey]);
 
-  // Trap unauthenticated users
-  if (!token) return <AuthPage setToken={setToken} />;
-  
-  if (isSetup === null) return <div style={{ background: "#f8fafc", height: "100vh" }} />;
   return (
     <Router>
+      {!hasGeminiKey && (
+        <div style={{
+          background: '#eff6ff', borderBottom: '1px solid #bfdbfe', padding: '10px 24px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', color: '#1e40af'
+        }}>
+          <div>
+            ✨ <strong>AI features are idle:</strong> Connect your free Gemini API key to activate semantic architecture search and node chat.
+          </div>
+          <button
+            onClick={() => setShowKeyModal(true)}
+            style={{
+              background: '#2563eb', color: '#fff', border: 'none', padding: '6px 12px',
+              borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '12px'
+            }}
+          >
+            Connect Key
+          </button>
+        </div>
+      )}
+
+      <GeminiKeyModal 
+        isOpen={showKeyModal} 
+        onClose={() => setShowKeyModal(false)}
+        onSaved={() => setHasGeminiKey(true)}
+      />
+
       <Routes>
-        <Route path="/setup" element={<SetupPage authFetch={authFetch} />} />
-        <Route path="/" element={isSetup ? <LandingPage authFetch={authFetch} handleLogout={handleLogout} /> : <Navigate to="/setup" />} />
-        <Route path="/projects" element={isSetup ? <AllProjectsPage authFetch={authFetch} /> : <Navigate to="/setup" />} />
-        <Route path="/visualize/:projectName" element={isSetup ? <VisualizerPage authFetch={authFetch} /> : <Navigate to="/setup" />} />
-        <Route path="/settings" element={isSetup ? <SettingsPage authFetch={authFetch} /> : <Navigate to="/setup" />} />
+        <Route path="/" element={<LandingPage onOpenKeyModal={() => setShowKeyModal(true)} />} />
+        <Route path="/projects" element={<AllProjectsPage />} />
+        <Route path="/visualize/:projectName" element={<VisualizerPage onOpenKeyModal={() => setShowKeyModal(true)} />} />
+        <Route path="/settings" element={<SettingsPage onKeyUpdated={() => setHasGeminiKey(true)} />} />
       </Routes>
     </Router>
   );

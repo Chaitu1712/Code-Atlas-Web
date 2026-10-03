@@ -3,58 +3,26 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
-import 'highlight.js/styles/atom-one-dark.css'; // Markdown code block theme
+import 'highlight.js/styles/atom-one-dark.css';
 import { IconClose, IconAuthor, IconModifier } from './Icons';
+import { apiFetch } from '../utils/apiClient';
 
-export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, currentProject, authFetch }) {
+export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, currentProject }) {
     const [activeTab, setActiveTab] = useState('code'); 
-    const [config, setConfig] = useState(null);
-    const [mode, setMode] = useState('online');
-    const [selectedModel, setSelectedModel] = useState('');
+    const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
     
-    // Chat State
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [isThinking, setIsThinking] = useState(false);
     const messagesEndRef = useRef(null);
 
-    // 1. Fetch config on mount
     useEffect(() => {
-        const apiUrl= import.meta.env.VITE_API_URL || 'http://localhost:8000';
-        authFetch(`${apiUrl}/api/config`)
-            .then(res => res.json())
-            .then(data => {
-                setConfig(data.config);
-                setMode(data.config.mode);
-                setSelectedModel(data.config.mode === 'online' ? data.config.active_online_model : data.config.active_local_model);
-            });
-    }, []);
-
-    // 2. Sync Mode/Model changes to Backend Config
-    const handleConfigChange = async (newMode, newModel) => {
-        setMode(newMode);
-        setSelectedModel(newModel);
-        
-        // Update backend silently
-        const updates = { mode: newMode };
-        if (newMode === 'online') updates.active_online_model = newModel;
-        else updates.active_local_model = newModel;
-        const apiUrl= import.meta.env.VITE_API_URL || 'http://localhost:8000';
-        await authFetch(`${apiUrl}/api/config`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updates)
-        });
-        
-        // Refresh local config state
-        const res = await authFetch(`${apiUrl}/api/config`);
-        const data = await res.json();
-        setConfig(data.config);
-    };
-
-    // 3. Clear chat when changing nodes
-    useEffect(() => {
-        if (viewingCode) setMessages([{ role: 'system', text: `Hi! I've loaded the architecture context for **\`${viewingCode.name}\`**. What would you like to know?` }]);
+        if (viewingCode) {
+            setMessages([{ 
+                role: 'system', 
+                text: `Loaded context for **\`${viewingCode.name}\`**. Ask me anything about its callers, callees, or architecture.` 
+            }]);
+        }
         setActiveTab('code');
     }, [viewingCode?.id]);
 
@@ -62,7 +30,6 @@ export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, 
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages, isThinking]);
 
-    // 4. Handle Chat Stream
     const handleChatSubmit = async (e) => {
         e.preventDefault();
         if (!input.trim() || isThinking || !viewingCode || !currentProject) return;
@@ -74,11 +41,13 @@ export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, 
         setMessages(prev => [...prev, { role: 'assistant', text: '' }]);
 
         try {
-            const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-            const response = await authFetch(`${apiUrl}/api/chat/${currentProject}`,  {
+            const response = await apiFetch(`/api/chat/${currentProject}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ node_id: viewingCode.id, message: userMsg, selected_model: selectedModel })
+                body: JSON.stringify({ 
+                    node_id: viewingCode.id, 
+                    message: userMsg, 
+                    selected_model: selectedModel 
+                })
             });
 
             const reader = response.body.getReader();
@@ -90,30 +59,25 @@ export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, 
                 const chunk = decoder.decode(value, { stream: true }); 
                 setMessages(prev => {
                     const newMsgs = [...prev];
-                    const lastIndex = newMsgs.length - 1;
-                    newMsgs[lastIndex] = { 
-                        ...newMsgs[lastIndex], 
-                        text: newMsgs[lastIndex].text + chunk 
+                    const lastIdx = newMsgs.length - 1;
+                    newMsgs[lastIdx] = { 
+                        ...newMsgs[lastIdx], 
+                        text: newMsgs[lastIdx].text + chunk 
                     };
                     return newMsgs;
                 });
             }
         } catch (err) {
-            setMessages(prev => [...prev, { role: 'assistant', text: "\n\n**Error:** Failed to connect to AI Engine." }]);
+            setMessages(prev => [...prev, { role: 'assistant', text: "\n\n⚠️ Failed to connect to AI engine." }]);
         } finally {
             setIsThinking(false);
         }
     };
 
-    const availableModels = mode === 'online' 
-        ? [
-            { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
-            { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-            { value: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
-            { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" }
-            
-          ]
-        : (config?.local_models || []).map(m => ({ value: m.path, label: m.name }));
+    const models = [
+        { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Fast)" },
+        { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Deep Reasoning)" }
+    ];
 
     if (!viewingCode) return null;
 
@@ -148,32 +112,17 @@ export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, 
                 </div>
             ) : (
                 <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden", background: "#f8fafc", borderRadius: "0 0 16px 16px" }}>
-                    
-                    {/* --- UPGRADED: Mode Toggle & Model Selector --- */}
-                    <div style={{ padding: "8px 16px", background: "#ffffff", borderBottom: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px" }}>
-                        
-                        {/* Mode Switcher */}
-                        <div style={{ display: "flex", background: "#f1f5f9", borderRadius: "6px", padding: "2px", border: "1px solid #e2e8f0" }}>
-                            <button 
-                                onClick={() => handleConfigChange('online', config.active_online_model)} 
-                                style={{ padding: "4px 10px", border: "none", background: mode === 'online' ? "#ffffff" : "transparent", color: mode === 'online' ? "#2563eb" : "#64748b", borderRadius: "4px", fontSize: "11px", fontWeight: "bold", cursor: "pointer", boxShadow: mode === 'online' ? "0 1px 2px rgba(0,0,0,0.05)" : "none" }}>
-                                ☁️ Cloud
-                            </button>
-                        </div>
-
-                        {/* Dynamic Model Dropdown */}
+                    <div style={{ padding: "8px 16px", background: "#ffffff", borderBottom: "1px solid #e2e8f0" }}>
                         <select 
                             value={selectedModel} 
-                            onChange={e => handleConfigChange(mode, e.target.value)} 
-                            style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", outline: "none", background: "#f8fafc", flex: 1 }}
+                            onChange={e => setSelectedModel(e.target.value)} 
+                            style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", background: "#f8fafc" }}
                         >
-                            {availableModels.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
-                            {availableModels.length === 0 && <option value="">{mode === 'online' ? "No cloud models" : "No local models downloaded"}</option>}
+                            {models.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
                         </select>
                     </div>
 
-                    {/* --- UPGRADED: Markdown Chat History --- */}
-                                        <div style={{ flex: 1, overflowY: "auto", padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                    <div style={{ flex: 1, overflowY: "auto", padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
                         {messages.map((msg, i) => (
                             <div key={i} style={{ display: "flex", justifyContent: msg.role === 'user' ? "flex-end" : "flex-start" }}>
                                 <div style={{ 
@@ -181,31 +130,14 @@ export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, 
                                     background: msg.role === 'user' ? "#2563eb" : "#ffffff", 
                                     color: msg.role === 'user' ? "#ffffff" : "#0f172a",
                                     border: msg.role === 'user' ? "none" : "1px solid #e2e8f0",
-                                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                                    overflowX: "auto"
+                                    boxShadow: "0 1px 2px rgba(0,0,0,0.05)"
                                 }}>
-                                    
-                                    {/* Render User message as plain text, Assistant as Markdown */}
                                     {msg.role === 'user' ? (
                                         <div style={{ whiteSpace: "pre-wrap" }}>{msg.text}</div>
                                     ) : (
-                                        <ReactMarkdown rehypePlugins={[rehypeHighlight]} components={{
-                                            p: ({node, ...props}) => <p style={{ margin: "0 0 10px 0" }} {...props} />,
-                                            pre: ({node, ...props}) => <pre style={{ margin: "10px 0", borderRadius: "8px", background: "#1e1e1e", padding: "10px", overflowX: "auto" }} {...props} />,
-                                            code: ({node, inline, className, children, ...props}) => {
-                                                const match = /language-(\w+)/.exec(className || '')
-                                                return !inline ? (
-                                                    <code className={className} style={{ fontFamily: "monospace", fontSize: "12px" }} {...props}>{children}</code>
-                                                ) : (
-                                                    <code style={{ background: "rgba(0,0,0,0.05)", padding: "2px 4px", borderRadius: "4px", color: "#e11d48", fontFamily: "monospace" }} {...props}>{children}</code>
-                                                )
-                                            }
-                                        }}>
+                                        <ReactMarkdown rehypePlugins={[rehypeHighlight]}>
                                             {msg.text}
                                         </ReactMarkdown>
-                                    )}
-                                    {msg.role === 'assistant' && msg.text === '' && isThinking && (
-                                        <span style={{ animation: "pulse 1s infinite", color: "#94a3b8" }}>● ● ●</span>
                                     )}
                                 </div>
                             </div>
@@ -213,14 +145,19 @@ export default function CodePanel({ viewingCode, setViewingCode, isCodeLoading, 
                         <div ref={messagesEndRef} />
                     </div>
 
-                    {/* Input Area */}
                     <form onSubmit={handleChatSubmit} style={{ padding: "16px", background: "#ffffff", borderTop: "1px solid #e2e8f0" }}>
                         <div style={{ display: "flex", gap: "8px" }}>
-                            <input type="text" value={input} onChange={e => setInput(e.target.value)} disabled={isThinking || availableModels.length === 0} placeholder={availableModels.length === 0 ? "No models available in this mode..." : "Ask about this architecture..."} style={{ flex: 1, padding: "12px", borderRadius: "8px", border: "1px solid #cbd5e1", outline: "none", fontSize: "13px" }} />
-                            <button type="submit" disabled={isThinking || !input.trim() || availableModels.length === 0} style={{ padding: "0 16px", borderRadius: "8px", border: "none", background: "#0f172a", color: "#fff", fontWeight: 600, cursor: isThinking ? "wait" : "pointer", opacity: (!input.trim() || isThinking || availableModels.length === 0) ? 0.5 : 1 }}>Send</button>
+                            <input 
+                                type="text" 
+                                value={input} 
+                                onChange={e => setInput(e.target.value)} 
+                                disabled={isThinking} 
+                                placeholder="Ask about this architecture..." 
+                                style={{ flex: 1, padding: "10px 14px", borderRadius: "8px", border: "1px solid #cbd5e1", outline: "none", fontSize: "13px" }} 
+                            />
+                            <button type="submit" disabled={isThinking || !input.trim()} style={{ padding: "0 16px", borderRadius: "8px", border: "none", background: "#0f172a", color: "#fff", fontWeight: 600, cursor: "pointer" }}>Send</button>
                         </div>
                     </form>
-
                 </div>
             )}
         </div>
