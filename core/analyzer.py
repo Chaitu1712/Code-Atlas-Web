@@ -1,14 +1,16 @@
-import sqlite3
 import networkx as nx
 from typing import Dict, List, Any
 from collections import defaultdict
 
 from core.strategies.path_normalizer import normalize_path
 from core.strategies.import_resolver import resolve_import
+from core.db import get_raw_connection
 
 class GraphAnalyzer:
-    def __init__(self, db_path: str = "atlas.db"):
-        self.conn = sqlite3.connect(db_path)
+    def __init__(self, db_path: str = "atlas.db", project_id: str = "default"):
+        self.db_path = db_path
+        self.project_id = project_id
+        self.conn = get_raw_connection(db_path)
         self.cursor = self.conn.cursor()
         self.graph = nx.DiGraph()
 
@@ -24,7 +26,7 @@ class GraphAnalyzer:
                 self.graph.add_edge(parent_pkg, pkg_name, type="contains")
 
     def build_module_graph(self):
-        self.cursor.execute("SELECT id, filepath FROM files")
+        self.cursor.execute("SELECT id, filepath FROM files WHERE project_id = ?", (self.project_id,))
         
         files_dict = {}
         normalized_modules = {}
@@ -40,7 +42,6 @@ class GraphAnalyzer:
                 all_parents.add(".".join(parts[:i]))
         internal_modules = set(normalized_modules.values())
 
-        # 1. Add Internal Files & Packages (Duplicate injection removed)
         for file_id, mod_name in normalized_modules.items():
             parent = ".".join(mod_name.split(".")[:-1]) if "." in mod_name else None
             node_type = "package" if mod_name in all_parents else "module_internal"
@@ -50,70 +51,58 @@ class GraphAnalyzer:
             if parent and not self.graph.has_edge(parent, mod_name):
                 self.graph.add_edge(parent, mod_name, type="contains")
 
-        # 2. Add Classes & Functions
-        self.cursor.execute("SELECT file_id, name, node_type, parent_name FROM nodes")
+        self.cursor.execute("SELECT file_id, name, node_type, parent_name FROM nodes WHERE project_id = ?", (self.project_id,))
         nodes_lookup = defaultdict(list)
         
         for file_id, name, node_type, parent_name in self.cursor.fetchall():
             mod_name = normalized_modules[file_id]
-            if parent_name:
-                node_id = f"{mod_name}.{parent_name}.{name}"
-                parent_id = f"{mod_name}.{parent_name}"
-            else:
-                node_id = f"{mod_name}.{name}"
-                parent_id = mod_name
+            node_id = f"{mod_name}.{parent_name}.{name}" if parent_name else f"{mod_name}.{name}"
+            parent_id = f"{mod_name}.{parent_name}" if parent_name else mod_name
                 
             self.graph.add_node(node_id, type=node_type, parent=parent_id)
             self.graph.add_edge(parent_id, node_id, type="contains")
             nodes_lookup[name].append(node_id)
 
-        # 3. Add Call Edges
-        self.cursor.execute("SELECT file_id, caller, callee FROM calls")
+        self.cursor.execute("SELECT file_id, caller, callee FROM calls WHERE project_id = ?", (self.project_id,))
         for file_id, caller, callee in self.cursor.fetchall():
             mod_name = normalized_modules[file_id]
             caller_id = f"{mod_name}.{caller}" if caller != "global" else mod_name
             
-            possible_callees = nodes_lookup.get(callee, [])
-            for callee_id in possible_callees:
+            for callee_id in nodes_lookup.get(callee, []):
                 if self.graph.has_node(caller_id) and self.graph.has_node(callee_id):
                     caller_parent = self.graph.nodes[caller_id].get('parent')
                     callee_parent = self.graph.nodes[callee_id].get('parent')
                     edge_type = "call_internal" if caller_parent == callee_parent else "call_external"
                     self.graph.add_edge(caller_id, callee_id, type=edge_type)
 
-        # 4. Process Imports
-        self.cursor.execute("SELECT file_id, imported_module, imported_names FROM imports")
+        self.cursor.execute("SELECT file_id, imported_module, imported_names FROM imports WHERE project_id = ?", (self.project_id,))
         for file_id, imported_module, imported_names_str in self.cursor.fetchall():
             source_filepath = files_dict[file_id]
             source_module = normalized_modules[file_id]
             imported_names = imported_names_str.split(",") if imported_names_str else []
             
-            resolved_file_module = resolve_import(source_filepath, source_module, imported_module, internal_modules)
-
-            if resolved_file_module not in internal_modules:
-                if not self.graph.has_node(resolved_file_module):
-                    self.graph.add_node(resolved_file_module, type="module_external")
+            resolved = resolve_import(source_filepath, source_module, imported_module, internal_modules)
+            if resolved not in internal_modules and not self.graph.has_node(resolved):
+                self.graph.add_node(resolved, type="module_external")
 
             linked_deeply = False
-            if imported_names and resolved_file_module in internal_modules:
+            if imported_names and resolved in internal_modules:
                 for name in imported_names:
-                    potential_node_id = f"{resolved_file_module}.{name}"
-                    if self.graph.has_node(potential_node_id):
-                        self.graph.add_edge(potential_node_id, source_module, symbols=name, type="import")
+                    pot_id = f"{resolved}.{name}"
+                    if self.graph.has_node(pot_id):
+                        self.graph.add_edge(pot_id, source_module, symbols=name, type="import")
                         linked_deeply = True
 
             if not linked_deeply:
-                self.graph.add_edge(resolved_file_module, source_module, symbols=imported_names_str, type="import")
+                self.graph.add_edge(resolved, source_module, symbols=imported_names_str, type="import")
 
-        # 5. Apply Saved Layout Positions
-        self.cursor.execute("SELECT node_id, fx, fy FROM layout")
+        self.cursor.execute("SELECT node_id, fx, fy FROM layout WHERE project_id = ?", (self.project_id,))
         for node_id, fx, fy in self.cursor.fetchall():
             if self.graph.has_node(node_id):
                 self.graph.nodes[node_id]['fx'] = fx
                 self.graph.nodes[node_id]['fy'] = fy
 
-        # 6. Inject Cross-Language API Edges
-        self.cursor.execute("SELECT caller_node_id, endpoint_node_id, path FROM api_edges")
+        self.cursor.execute("SELECT caller_node_id, endpoint_node_id, path FROM api_edges WHERE project_id = ?", (self.project_id,))
         for caller_id, endpoint_id, path in self.cursor.fetchall():
             if self.graph.has_node(caller_id) and self.graph.has_node(endpoint_id):
                 self.graph.add_edge(caller_id, endpoint_id, type="api_call", path=path)
@@ -121,7 +110,7 @@ class GraphAnalyzer:
     def get_cyclic_dependencies(self) -> List[List[str]]:
         try:
             return list(nx.simple_cycles(self.graph))
-        except (nx.NetworkXNoCycle, Exception):
+        except Exception:
             return []
 
     def export_json(self) -> Dict[str, Any]:

@@ -3,34 +3,32 @@ from pathlib import Path
 from typing import Optional, AsyncGenerator
 from google import genai
 from core.config import get_config
+from core.db import get_raw_connection
 
 class CodeAtlasAI:
-    def __init__(self, db_path: str, user_id: str, api_key: Optional[str] = None):
+    def __init__(self, db_path: str, user_id: str, project_id: str = "default", api_key: Optional[str] = None):
         self.db_path = db_path
         self.user_id = user_id
+        self.project_id = project_id
         self.api_key = api_key
 
     def _get_context(self, node_id: str) -> Optional[dict]:
         node_name = node_id.split('.')[-1]
-        safe_db_path = Path(self.db_path).resolve()
-        if not safe_db_path.exists():
-            return None
-            
-        conn = sqlite3.connect(str(safe_db_path), timeout=10)
+        conn = get_raw_connection(self.db_path)
         try:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT n.node_type, n.code_snippet, f.filepath 
                 FROM nodes n JOIN files f ON n.file_id = f.id 
-                WHERE n.name = ?
-            """, (node_name,))
+                WHERE n.project_id = ? AND n.name = ?
+            """, (self.project_id, node_name))
             row = cursor.fetchone()
             if not row: 
                 return None
                 
             node_type, snippet, filepath = row
-            callers = [r[0] for r in cursor.execute("SELECT caller FROM calls WHERE callee = ?", (node_name,)).fetchall()]
-            callees = [r[0] for r in cursor.execute("SELECT callee FROM calls WHERE caller = ?", (node_name,)).fetchall()]
+            callers = [r[0] for r in cursor.execute("SELECT caller FROM calls WHERE project_id = ? AND callee = ?", (self.project_id, node_name)).fetchall()]
+            callees = [r[0] for r in cursor.execute("SELECT callee FROM calls WHERE project_id = ? AND caller = ?", (self.project_id, node_name)).fetchall()]
             
             return {
                 "name": node_id, 

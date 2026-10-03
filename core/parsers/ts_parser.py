@@ -37,7 +37,6 @@ class TSParser:
                     method= (endpoint_match.group(1) or 'get').upper()
                     path = endpoint_match.group(2)
                     parsed_node.api_endpoint = f"{method.upper()} {path}"
-                    print(f"🟢 [JS/TS EXTRACT] Endpoint: {parsed_node.api_endpoint}")
                 
                 consumer_match = re.search(r'(?:fetch|(?:axios|http|api|client|request)\.(get|post|put|delete|patch))\([\'"`]([^\'"`]+)[\'"`]', parsed_node.code_snippet, re.IGNORECASE)
                 if consumer_match:
@@ -45,7 +44,6 @@ class TSParser:
                     path = consumer_match.group(2)
                     api_call_str = f"{method} {path}"
                     module.calls.append(ParsedCall(caller=name, callee="API", line=node.start_point[0]+1, api_call=api_call_str))
-                    print(f"🔵 [JS/TS EXTRACT] Found Consumer: {api_call_str} in {name}")
                 
                 module.functions.append(parsed_node)
 

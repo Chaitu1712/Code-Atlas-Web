@@ -13,13 +13,26 @@ def get_config(user_id: str) -> Dict[str, Any]:
     if not config_file.exists():
         return {
             "gemini_api_key": "",
-            "active_online_model": "gemini-2.5-flash"
+            "active_online_model": "gemini-2.5-flash",
+            "embedding_model": "gemini-embedding-001",
+            "embedding_rpm": 80,
+            "account_tier": "free"  # "free" or "paid"
         }
     try:
         with open(config_file, "r") as f:
-            return json.load(f)
+            cfg = json.load(f)
+            cfg.setdefault("embedding_model", "gemini-embedding-001")
+            cfg.setdefault("embedding_rpm", 80)
+            cfg.setdefault("account_tier", "free")
+            return cfg
     except Exception:
-        return {"gemini_api_key": "", "active_online_model": "gemini-2.5-flash"}
+        return {
+            "gemini_api_key": "",
+            "active_online_model": "gemini-2.5-flash",
+            "embedding_model": "gemini-embedding-001",
+            "embedding_rpm": 80,
+            "account_tier": "free"
+        }
 
 def save_config(user_id: str, new_config: dict):
     config_file = get_user_config_path(user_id)
