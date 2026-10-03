@@ -1,41 +1,20 @@
 import sqlite3
 import numpy as np
-import faiss
-import os
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
+from typing import List, Dict, Any, Optional
+from google import genai
+from core.strategies.path_normalizer import normalize_path
 
 class EmbeddingService:
-    def __init__(self, db_path: str, index_path: str):
-        self.db_path = db_path
-        self.index_path = index_path
-        
-        self.models_dir = Path("models").resolve()
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        
-        model_name = 'all-MiniLM-L6-v2'
-        expected_cache_dir = self.models_dir / f"models--sentence-transformers--{model_name}"
-        
-        is_offline = expected_cache_dir.exists()
-        
-        if is_offline:
-            print(f"Loading cached embedding model from {self.models_dir} (Offline Mode)...")
-        else:
-            print("Downloading embedding model (this may take ~80MB the first time)...")
+    def __init__(self, db_path: str, api_key: Optional[str] = None):
+        self.db_path = str(Path(db_path).resolve())
+        self.api_key = api_key
 
-        self.model = SentenceTransformer(
-            model_name,
-            cache_folder=str(self.models_dir),
-            local_files_only=is_offline
-        )
-        
-        self.dimension = 384
-        
-        if os.path.exists(self.index_path):
-            self.index = faiss.read_index(self.index_path)
-        else:
-            self.index = faiss.IndexIDMap(faiss.IndexFlatL2(self.dimension))
     def generate_embeddings(self):
+        if not self.api_key:
+            print("⚠️ [EMBEDDINGS] No Gemini API key provided. Skipping semantic embedding generation.")
+            return
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT id, name, node_type, code_snippet FROM nodes WHERE code_snippet IS NOT NULL")
@@ -43,59 +22,94 @@ class EmbeddingService:
         conn.close()
 
         if not nodes:
-            print("No code snippets found in database to embed.")
             return
 
-        texts_to_embed = []
-        node_ids = []
+        client = genai.Client(api_key=self.api_key)
+        vector_map = {}
 
-        for node_id, name, node_type, snippet in nodes:
-            semantic_doc = f"Type: {node_type}\nName: {name}\nCode:\n{snippet}"
-            texts_to_embed.append(semantic_doc)
-            node_ids.append(node_id)
+        # Batch embed in groups of 20 to prevent payload limits
+        batch_size = 20
+        for i in range(0, len(nodes), batch_size):
+            chunk = nodes[i:i + batch_size]
+            node_ids = [row[0] for row in chunk]
+            texts = [f"Type: {row[2]}\nName: {row[1]}\nCode:\n{row[3][:1500]}" for row in chunk]
 
-        print(f"Generating embeddings for {len(texts_to_embed)} code blocks...")
-        
-        embeddings = self.model.encode(texts_to_embed, show_progress_bar=True)
+            try:
+                for n_id, text in zip(node_ids, texts):
+                    response = client.models.embed_content(
+                        model="text-embedding-004",
+                        contents=text
+                    )
+                    # Extract embedding vector
+                    values = response.embeddings[0].values if hasattr(response, "embeddings") else response.embedding.values
+                    vector_map[n_id] = np.array(values, dtype=np.float32)
+            except Exception as e:
+                print(f"⚠️ [EMBEDDINGS ERROR] Failed batch: {e}")
+                continue
 
-        vectors_np = np.array(embeddings).astype('float32')
-        ids_np = np.array(node_ids).astype('int64')
+        if vector_map:
+            from core.db import Database
+            db = Database(self.db_path)
+            db.save_vectors(vector_map)
+            db.close()
+            print(f"✅ [EMBEDDINGS] Successfully stored {len(vector_map)} vectors in database.")
 
-        self.index = faiss.IndexIDMap(faiss.IndexFlatL2(self.dimension))
-        self.index.add_with_ids(vectors_np, ids_np)
-        faiss.write_index(self.index, self.index_path)
-        print(f"✅ Successfully saved {len(texts_to_embed)} vectors to {self.index_path}")
-
-    def search(self, query: str, top_k: int = 5) -> list:
-        from core.strategies.path_normalizer import normalize_path
-
-        if not os.path.exists(self.index_path) or self.index.ntotal == 0:
+    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        if not self.api_key:
             return []
 
-        query_vector = self.model.encode([query]).astype('float32')
-        distances, indices = self.index.search(query_vector, top_k)
+        from core.db import Database
+        db = Database(self.db_path)
+        all_vectors = db.get_all_vectors()
+        db.close()
+
+        if not all_vectors:
+            return []
+
+        try:
+            client = genai.Client(api_key=self.api_key)
+            query_res = client.models.embed_content(
+                model="text-embedding-004",
+                contents=query
+            )
+            query_values = query_res.embeddings[0].values if hasattr(query_res, "embeddings") else query_res.embedding.values
+            query_vec = np.array(query_values, dtype=np.float32)
+        except Exception as e:
+            print(f"⚠️ [SEARCH ERROR] Gemini embedding request failed: {e}")
+            return []
+
+        node_ids = [item[0] for item in all_vectors]
+        matrix = np.array([item[1] for item in all_vectors])
+
+        # Cosine similarity
+        dot_products = np.dot(matrix, query_vec)
+        norms = (np.linalg.norm(matrix, axis=1) * np.linalg.norm(query_vec)) + 1e-10
+        similarities = dot_products / norms
+
+        top_indices = np.argsort(similarities)[::-1][:top_k]
 
         results = []
         conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
         try:
-            cursor = conn.cursor()
-            for i, node_id in enumerate(indices[0]):
-                if node_id == -1: continue
-                
+            for idx in top_indices:
+                score = float(similarities[idx])
+                if score < 0.25:  # Relevance threshold
+                    continue
+
+                target_id = node_ids[idx]
                 cursor.execute("""
                     SELECT n.name, n.node_type, n.parent_name, f.filepath, n.start_line
                     FROM nodes n JOIN files f ON n.file_id = f.id WHERE n.id = ?
-                """, (int(node_id),))
-                
+                """, (target_id,))
                 row = cursor.fetchone()
                 if row:
                     name, node_type, parent_name, filepath, start_line = row
-                    
                     mod_name = normalize_path(filepath)
                     full_node_id = f"{mod_name}.{parent_name}.{name}" if parent_name else f"{mod_name}.{name}"
-                    
+
                     results.append({
-                        "distance": float(distances[0][i]),
+                        "distance": 1.0 - score,
                         "id": full_node_id,
                         "name": name,
                         "type": node_type,
@@ -104,5 +118,5 @@ class EmbeddingService:
                     })
         finally:
             conn.close()
-            
+
         return results

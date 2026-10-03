@@ -36,3 +36,5 @@ data/
 *.index
 
 .env
+
+Context/

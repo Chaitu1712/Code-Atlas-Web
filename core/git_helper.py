@@ -1,16 +1,21 @@
 import subprocess
+from pathlib import Path
 from collections import Counter
 
 def get_git_authors(filepath: str, start_line: int, end_line: int):
-    """Runs git blame on specific lines to extract authorship data."""
+    """Safely extracts git blame metadata, returning None if git is absent."""
     try:
-        cmd = ["git", "blame", "-L", f"{start_line},{end_line}", "--line-porcelain", filepath]
+        path_obj = Path(filepath)
+        if not path_obj.exists():
+            return None
+
+        cmd = ["git", "blame", "-L", f"{start_line},{end_line}", "--line-porcelain", str(path_obj)]
         startupinfo = None
         if hasattr(subprocess, 'STARTUPINFO'):
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-        res = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo)
+        res = subprocess.run(cmd, capture_output=True, text=True, startupinfo=startupinfo, timeout=5)
         if res.returncode != 0: 
             return None
         
@@ -18,8 +23,8 @@ def get_git_authors(filepath: str, start_line: int, end_line: int):
         authors = []
         oldest_time = float('inf')
         original_author = "Unknown"
-        
         current_author = ""
+        
         for line in lines:
             if line.startswith("author "):
                 current_author = line[7:]
@@ -29,6 +34,7 @@ def get_git_authors(filepath: str, start_line: int, end_line: int):
                 if time < oldest_time:
                     oldest_time = time
                     original_author = current_author
+
         heavy_contributor = Counter(authors).most_common(1)[0][0] if authors else "Unknown"
         return {
             "original": original_author,

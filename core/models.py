@@ -17,7 +17,7 @@ class ParsedNode(BaseModel):
      
 class ParsedImport(BaseModel):
     module: str
-    names: List[str] =[]
+    names: List[str] = []
     line: int
 
 class ParsedCall(BaseModel):
@@ -30,34 +30,19 @@ class ParsedModule(BaseModel):
     filepath: str
     classes: List[ParsedNode] = []
     functions: List[ParsedNode] = []
-    imports: List[ParsedImport] =[]
+    imports: List[ParsedImport] = []
     calls: List[ParsedCall] = [] 
-
-class ProjectRequest(BaseModel):
-    project_name: str
-    directory: str
 
 class LayoutUpdate(BaseModel):
     node_id: str
-    fx: Optional[float]
-    fy: Optional[float]
-    
-class DownloadRequest(BaseModel):
-    repo_id: str
-    filename: str
-    display_name: str 
+    fx: Optional[float] = None
+    fy: Optional[float] = None
 
 class ChatRequest(BaseModel):
     node_id: str
     message: str
-    selected_model: str 
-
-class AuthRequest(BaseModel):
-    username: str
-    password: str
+    selected_model: Optional[str] = "gemini-2.5-flash"
 
 class GithubRequest(BaseModel):
     github_url: str
-
-class PasswordChangeRequest(BaseModel):
-    new_password: str
+    project_name: Optional[str] = None
