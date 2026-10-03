@@ -1,18 +1,28 @@
 FROM python:3.11-slim
 
+# Install minimal build tools required for tree-sitter C bindings
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-
+# Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY api.py .
+# Copy backend source code
 COPY core/ ./core/
+COPY api.py .
 
-RUN mkdir -p data models
+# Create writable data directory for SQLite databases
+RUN mkdir -p /app/data && chmod 777 /app/data
 
-ENV PORT=7860
-EXPOSE 7860
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "7860"]
+EXPOSE 8000
+
+CMD ["uvicorn", "api.py:app", "--host", "0.0.0.0", "--port", "8000"]

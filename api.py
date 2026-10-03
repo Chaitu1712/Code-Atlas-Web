@@ -27,7 +27,9 @@ from core.llm import CodeAtlasAI
 from core.strategies.path_normalizer import normalize_path
 from core.git_helper import get_git_authors
 from core.models import ChatRequest, LayoutUpdate, GithubRequest
+from dotenv import load_dotenv
 
+load_dotenv()
 app = FastAPI(title="Code Atlas Web API")
 
 app.add_middleware(

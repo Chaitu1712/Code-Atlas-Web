@@ -1,3 +1,4 @@
+libsql>=0.1.11
 fastapi===0.142.2
 uvicorn===0.54.0
 pydantic===2.13.5
@@ -10,3 +11,4 @@ tree-sitter-python===0.25.0
 tree-sitter-typescript===0.23.2
 httpx===0.28.1
 python-multipart===0.0.32
+python-dotenv===1.2.4

@@ -3,7 +3,8 @@ import { useParams } from 'react-router-dom';
 import GraphVisualizer from '../GraphVisualizer';
 import Sidebar from '../components/Sidebar';
 import CodePanel from '../components/CodePanel';
-import CyclesAlert from '../components/CyclesAlert'; 
+import CyclesAlert from '../components/CyclesAlert';
+import GraphLegend from '../components/GraphLegend'; 
 import { apiFetch } from '../utils/apiClient';
 
 export default function VisualizerPage() {
@@ -71,6 +72,7 @@ export default function VisualizerPage() {
             />
             <CodePanel viewingCode={viewingCode} setViewingCode={setViewingCode} isCodeLoading={isCodeLoading} currentProject={projectName} />
             {cycles.length > 0 && <CyclesAlert cycles={cycles} />}
+            <GraphLegend />
             {loading ? (
                 <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", color: "#64748b" }}>Loading architecture graph...</div>
             ) : (
